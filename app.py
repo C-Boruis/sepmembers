@@ -54,11 +54,16 @@ def preprocess_members(df):
     return df
 
 # -----------------------------------------------------------------------------
-# 4. 인증 (로그인) 함수
+# 4. 인증 (로그인) 함수 - [수정됨: 마스터키 삭제, 파일 인증만 사용]
 # -----------------------------------------------------------------------------
 def login_section():
     st.markdown("## ⛪ 서울은평교회 성도 관리 시스템")
     
+    # 계정 파일이 없으면 안내 메시지 출력 (자동 생성하지 않음, 사용자 제공 파일 사용)
+    if not os.path.exists(ACCOUNTS_FILE):
+        st.error("⚠️ 계정 파일(accounts.csv)이 없습니다. 관리자에게 문의하세요.")
+        return
+
     with st.form("login_form"):
         username = st.text_input("아이디")
         password = st.text_input("비밀번호", type="password")
@@ -68,39 +73,27 @@ def login_section():
             clean_username = str(username).strip()
             clean_password = str(password).strip()
 
-            # 마스터 키 (긴급 접속용)
-            is_master_admin = (clean_username == "admin" and clean_password == "1234")
+            accounts = load_data(ACCOUNTS_FILE)
             
-            is_file_user = False
-            user_role = "user"
-            user_name = "성도님"
-
-            if not is_master_admin:
-                if os.path.exists(ACCOUNTS_FILE):
-                    accounts = load_data(ACCOUNTS_FILE)
-                    if accounts is not None:
-                        accounts['id'] = accounts['id'].astype(str).str.strip()
-                        accounts['pw'] = accounts['pw'].astype(str).str.strip()
-                        
-                        user = accounts[(accounts['id'] == clean_username) & (accounts['pw'] == clean_password)]
-                        if not user.empty:
-                            is_file_user = True
-                            user_name = user.iloc[0]['name']
-                            user_role = user.iloc[0]['role']
-
-            if is_master_admin or is_file_user:
-                st.session_state['logged_in'] = True
-                if is_master_admin:
-                    st.session_state['username'] = "관리자(긴급)"
-                    st.session_state['role'] = "admin"
+            if accounts is not None:
+                # 데이터 공백 제거 및 문자열 변환
+                accounts['id'] = accounts['id'].astype(str).str.strip()
+                accounts['pw'] = accounts['pw'].astype(str).str.strip()
+                
+                # 일치하는 사용자 찾기
+                user = accounts[(accounts['id'] == clean_username) & (accounts['pw'] == clean_password)]
+                
+                if not user.empty:
+                    st.session_state['logged_in'] = True
+                    st.session_state['username'] = user.iloc[0]['name']
+                    st.session_state['role'] = user.iloc[0]['role']
+                    st.success(f"{user.iloc[0]['name']}님 환영합니다!")
+                    time.sleep(0.5)
+                    st.rerun()
                 else:
-                    st.session_state['username'] = user_name
-                    st.session_state['role'] = user_role
-                st.success(f"{st.session_state['username']}님 환영합니다!")
-                time.sleep(0.5)
-                st.rerun()
+                    st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
             else:
-                st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
+                st.error("계정 파일을 읽을 수 없습니다.")
 
 # -----------------------------------------------------------------------------
 # 5. 메인 앱
@@ -112,7 +105,8 @@ def main_app():
             st.session_state['logged_in'] = False
             st.rerun()
         st.divider()
-        st.info("💡 데이터 수정 후 반드시 [다운로드] 하여 GitHub에 업로드하세요.")
+        if st.session_state['role'] == 'admin':
+            st.info("💡 데이터 수정 후 반드시 [다운로드] 하여 GitHub에 업로드하세요.")
 
     # 명단 로드
     if 'members_df' not in st.session_state:
@@ -180,7 +174,7 @@ def main_app():
                         with st.container(border=True):
                             c1, c2 = st.columns([1, 2])
                             
-                            # 왼쪽: 사진 및 직분
+                            # 왼쪽: 사진
                             with c1:
                                 img = p['사진'] if pd.notna(p['사진']) else ""
                                 if img and os.path.exists(img): st.image(img)
@@ -189,17 +183,14 @@ def main_app():
                             # 오른쪽: 주요 정보
                             with c2:
                                 st.subheader(p['이름'])
-                                # [수정됨] 교구 / 구역 / 교제부서 / 직분 순서 표출
                                 st.write(f"{p['교구']} / {p['구역']} / {p['교제부서']} {p['직분']}")
-                                
                                 st.text(f"📞 {p['전화번호']}")
                                 
-                                # [수정됨] 지도 아이콘만 표출 (클릭 시 이동)
+                                # [수정됨] 주소는 아이콘(📍)으로만 표시
                                 address = str(p['자택전화 / 주소'])
                                 map_url = f"https://www.google.com/maps/search/?api=1&query={address}"
-                                st.markdown(f"[📍 위치 보기 (구글지도)]({map_url})")
+                                st.markdown(f"[📍]({map_url})", help="클릭하면 구글 지도로 이동합니다.")
                                 
-                                # [수정됨] 상세 정보에 모든 항목 포함
                                 with st.expander("상세 정보"):
                                     st.write(f"**생년:** {p['생년']}")
                                     st.write(f"**구원일:** {p['구원일']}")
@@ -223,11 +214,6 @@ def main_app():
                 acc_df = load_data(ACCOUNTS_FILE)
             else:
                 acc_df = pd.DataFrame(columns=['id', 'pw', 'name', 'role'])
-                if acc_df.empty:
-                    acc_df = pd.DataFrame([
-                        {'id': 'admin', 'pw': '1234', 'name': '관리자', 'role': 'admin'},
-                        {'id': 'user1', 'pw': '1111', 'name': '성도님', 'role': 'user'}
-                    ])
             
             edited_acc = st.data_editor(acc_df, num_rows="dynamic", use_container_width=True, key="acc")
             st.download_button("💾 계정 다운로드", save_data_to_csv(edited_acc), "accounts_updated.csv", "text/csv")
