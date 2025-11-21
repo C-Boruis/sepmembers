@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import time
+from PIL import Image, ImageOps  # 이미지 처리를 위한 라이브러리 추가
 
 # -----------------------------------------------------------------------------
 # 1. 설정 및 초기화
@@ -22,7 +23,7 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 로드 함수
+# 2. 헬퍼 함수
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data(file_path):
@@ -39,6 +40,20 @@ def load_data(file_path):
 def save_data_to_csv(df):
     return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
+# [신규 기능] 이미지 로드 및 크기 통일 함수 (3:4 비율)
+def load_image_fixed(image_path, size=(300, 400)):
+    if not os.path.exists(image_path):
+        return None
+    try:
+        img = Image.open(image_path)
+        # 이미지의 방향정보(EXIF) 처리 (회전 방지)
+        img = ImageOps.exif_transpose(img)
+        # 지정된 크기로 자르기 (Center Crop) - 증명사진 느낌
+        img = ImageOps.fit(img, size, Image.Resampling.LANCZOS)
+        return img
+    except Exception as e:
+        return None
+
 # -----------------------------------------------------------------------------
 # 3. 데이터 전처리
 # -----------------------------------------------------------------------------
@@ -54,12 +69,11 @@ def preprocess_members(df):
     return df
 
 # -----------------------------------------------------------------------------
-# 4. 인증 (로그인) 함수 - [수정됨: 마스터키 삭제, 파일 인증만 사용]
+# 4. 인증 (로그인) 함수
 # -----------------------------------------------------------------------------
 def login_section():
     st.markdown("## ⛪ 서울은평교회 성도 관리 시스템")
     
-    # 계정 파일이 없으면 안내 메시지 출력 (자동 생성하지 않음, 사용자 제공 파일 사용)
     if not os.path.exists(ACCOUNTS_FILE):
         st.error("⚠️ 계정 파일(accounts.csv)이 없습니다. 관리자에게 문의하세요.")
         return
@@ -76,11 +90,9 @@ def login_section():
             accounts = load_data(ACCOUNTS_FILE)
             
             if accounts is not None:
-                # 데이터 공백 제거 및 문자열 변환
                 accounts['id'] = accounts['id'].astype(str).str.strip()
                 accounts['pw'] = accounts['pw'].astype(str).str.strip()
                 
-                # 일치하는 사용자 찾기
                 user = accounts[(accounts['id'] == clean_username) & (accounts['pw'] == clean_password)]
                 
                 if not user.empty:
@@ -174,22 +186,27 @@ def main_app():
                         with st.container(border=True):
                             c1, c2 = st.columns([1, 2])
                             
-                            # 왼쪽: 사진
+                            # [왼쪽: 사진] - 크기 통일 적용
                             with c1:
-                                img = p['사진'] if pd.notna(p['사진']) else ""
-                                if img and os.path.exists(img): st.image(img)
-                                else: st.image("https://via.placeholder.com/150?text=No+Image")
+                                img_path = p['사진'] if pd.notna(p['사진']) else ""
+                                img_obj = load_image_fixed(img_path)
+                                
+                                if img_obj:
+                                    st.image(img_obj, use_column_width=True)
+                                else:
+                                    # 이미지가 없을 때도 동일한 비율의 회색 박스 표시
+                                    st.image("https://via.placeholder.com/300x400?text=No+Image", use_column_width=True)
                             
-                            # 오른쪽: 주요 정보
+                            # [오른쪽: 주요 정보]
                             with c2:
                                 st.subheader(p['이름'])
                                 st.write(f"{p['교구']} / {p['구역']} / {p['교제부서']} {p['직분']}")
                                 st.text(f"📞 {p['전화번호']}")
                                 
-                                # [수정됨] 주소는 아이콘(📍)으로만 표시
+                                # [수정됨] 주소는 심플한 핀 아이콘(📍)으로만 표시
                                 address = str(p['자택전화 / 주소'])
                                 map_url = f"https://www.google.com/maps/search/?api=1&query={address}"
-                                st.markdown(f"[📍]({map_url})", help="클릭하면 구글 지도로 이동합니다.")
+                                st.markdown(f"### [📍]({map_url})") # 아이콘 크기 키움 (###)
                                 
                                 with st.expander("상세 정보"):
                                     st.write(f"**생년:** {p['생년']}")
