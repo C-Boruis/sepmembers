@@ -54,12 +54,11 @@ def preprocess_members(df):
     return df
 
 # -----------------------------------------------------------------------------
-# 4. 인증 (로그인) 함수 - [긴급 접속 코드 적용]
+# 4. 인증 (로그인) 함수
 # -----------------------------------------------------------------------------
 def login_section():
     st.markdown("## ⛪ 서울은평교회 성도 관리 시스템")
     
-    # 로그인 폼
     with st.form("login_form"):
         username = st.text_input("아이디")
         password = st.text_input("비밀번호", type="password")
@@ -69,11 +68,9 @@ def login_section():
             clean_username = str(username).strip()
             clean_password = str(password).strip()
 
-            # [핵심 수정] 파일 확인 전에 코드로 먼저 인증 (Master Key)
-            # 파일이 깨져도 이 조건이 참이면 무조건 로그인 됩니다.
+            # 마스터 키 (긴급 접속용)
             is_master_admin = (clean_username == "admin" and clean_password == "1234")
             
-            # 파일에서 확인 (일반 유저용)
             is_file_user = False
             user_role = "user"
             user_name = "성도님"
@@ -82,7 +79,6 @@ def login_section():
                 if os.path.exists(ACCOUNTS_FILE):
                     accounts = load_data(ACCOUNTS_FILE)
                     if accounts is not None:
-                        # 공백 제거
                         accounts['id'] = accounts['id'].astype(str).str.strip()
                         accounts['pw'] = accounts['pw'].astype(str).str.strip()
                         
@@ -92,17 +88,14 @@ def login_section():
                             user_name = user.iloc[0]['name']
                             user_role = user.iloc[0]['role']
 
-            # 로그인 성공 처리
             if is_master_admin or is_file_user:
                 st.session_state['logged_in'] = True
-                
                 if is_master_admin:
                     st.session_state['username'] = "관리자(긴급)"
                     st.session_state['role'] = "admin"
                 else:
                     st.session_state['username'] = user_name
                     st.session_state['role'] = user_role
-                
                 st.success(f"{st.session_state['username']}님 환영합니다!")
                 time.sleep(0.5)
                 st.rerun()
@@ -175,6 +168,7 @@ def main_app():
             filtered_df = filtered_df[mask]
 
         st.write(f"총 {len(filtered_df)}명")
+        
         if filtered_df.empty:
             st.info("검색 결과 없음")
         else:
@@ -185,19 +179,34 @@ def main_app():
                     with cols[idx]:
                         with st.container(border=True):
                             c1, c2 = st.columns([1, 2])
+                            
+                            # 왼쪽: 사진 및 직분
                             with c1:
                                 img = p['사진'] if pd.notna(p['사진']) else ""
                                 if img and os.path.exists(img): st.image(img)
-                                else: st.image("https://via.placeholder.com/150")
+                                else: st.image("https://via.placeholder.com/150?text=No+Image")
+                            
+                            # 오른쪽: 주요 정보
                             with c2:
                                 st.subheader(p['이름'])
-                                st.text(f"{p['교구']}/{p['구역']} {p['직분']}")
+                                # [수정됨] 교구 / 구역 / 교제부서 / 직분 순서 표출
+                                st.write(f"{p['교구']} / {p['구역']} / {p['교제부서']} {p['직분']}")
+                                
                                 st.text(f"📞 {p['전화번호']}")
-                                st.markdown(f"[📍 지도](https://www.google.com/maps/search/?api=1&query={p['자택전화 / 주소']})")
-                                if p['차량번호']: st.write(f"🚗 {p['차량번호']}")
-                                with st.expander("상세"):
-                                    st.write(f"가족: {p['가족']}")
-                                    st.write(f"주소: {p['자택전화 / 주소']}")
+                                
+                                # [수정됨] 지도 아이콘만 표출 (클릭 시 이동)
+                                address = str(p['자택전화 / 주소'])
+                                map_url = f"https://www.google.com/maps/search/?api=1&query={address}"
+                                st.markdown(f"[📍 위치 보기 (구글지도)]({map_url})")
+                                
+                                # [수정됨] 상세 정보에 모든 항목 포함
+                                with st.expander("상세 정보"):
+                                    st.write(f"**생년:** {p['생년']}")
+                                    st.write(f"**구원일:** {p['구원일']}")
+                                    st.write(f"**주소:** {address}")
+                                    st.write(f"**봉사:** {p['봉사부서']}")
+                                    st.write(f"**가족:** {p['가족']}")
+                                    st.write(f"**차량:** {p['차량번호']}")
 
     # TAB 2: 명단 관리 (Admin)
     if st.session_state['role'] == 'admin':
@@ -210,12 +219,10 @@ def main_app():
     # TAB 3: 계정 관리 (Admin)
     if st.session_state['role'] == 'admin':
         with tab3:
-            st.info("여기서 계정을 정리하고 다운로드 받은 뒤, GitHub에 업로드하면 오류가 해결됩니다.")
             if os.path.exists(ACCOUNTS_FILE):
                 acc_df = load_data(ACCOUNTS_FILE)
             else:
                 acc_df = pd.DataFrame(columns=['id', 'pw', 'name', 'role'])
-                # 강제 초기화 데이터
                 if acc_df.empty:
                     acc_df = pd.DataFrame([
                         {'id': 'admin', 'pw': '1234', 'name': '관리자', 'role': 'admin'},
