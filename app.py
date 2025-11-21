@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import os
 import time
-from PIL import Image, ImageOps  # 이미지 처리를 위한 라이브러리 추가
+import re
+from PIL import Image, ImageOps
 
 # -----------------------------------------------------------------------------
 # 1. 설정 및 초기화
@@ -12,6 +13,34 @@ st.set_page_config(
     page_icon="⛪",
     layout="wide"
 )
+
+# [CSS] 모바일 최적화 및 카드 디자인 개선
+st.markdown("""
+<style>
+    /* 카드 컨테이너 스타일 */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] {
+        background-color: #ffffff;
+        border-radius: 10px;
+        padding: 5px;
+    }
+    /* 모바일 화면(너비 640px 이하) 최적화 */
+    @media (max-width: 640px) {
+        .block-container {
+            padding-top: 1rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        /* 제목 폰트 사이즈 조정 */
+        h1, h2, h3 {
+            font-size: 1.5rem !important;
+        }
+        /* 이미지 컬럼과 텍스트 컬럼이 모바일에서 자연스럽게 보이도록 조정 */
+        div[data-testid="stColumn"] {
+            min-width: 100px !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # 데이터 파일 경로 설정
 DATA_DIR = "data"
@@ -40,19 +69,35 @@ def load_data(file_path):
 def save_data_to_csv(df):
     return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
-# [신규 기능] 이미지 로드 및 크기 통일 함수 (3:4 비율)
 def load_image_fixed(image_path, size=(300, 400)):
     if not os.path.exists(image_path):
         return None
     try:
         img = Image.open(image_path)
-        # 이미지의 방향정보(EXIF) 처리 (회전 방지)
         img = ImageOps.exif_transpose(img)
-        # 지정된 크기로 자르기 (Center Crop) - 증명사진 느낌
         img = ImageOps.fit(img, size, Image.Resampling.LANCZOS)
         return img
     except Exception as e:
         return None
+
+# [신규 기능] 주소 정제 함수 (전화번호 제거하고 주소만 추출)
+def get_clean_address_url(raw_address):
+    if pd.isna(raw_address) or str(raw_address).strip() == "":
+        return "https://www.google.com/maps"
+    
+    raw_str = str(raw_address)
+    # 전화번호 패턴 제거 (예: 010-XXXX-XXXX, 02-XXX-XXXX 등)
+    # 정규표현식: 숫자와 하이픈이 섞인 패턴을 공백으로 치환
+    clean_addr = re.sub(r'[\d]{2,3}-[\d]{3,4}-[\d]{4}', '', raw_str)
+    
+    # 괄호 안에 있는 내용도 주소 검색에 방해되면 제거할 수 있으나, 보통 동/호수라 유지
+    clean_addr = clean_addr.strip()
+    
+    # 만약 전화번호만 있어서 다 지워졌다면 원본 사용
+    if clean_addr == "":
+        clean_addr = raw_str
+        
+    return f"https://www.google.com/maps/search/?api=1&query={clean_addr}"
 
 # -----------------------------------------------------------------------------
 # 3. 데이터 전처리
@@ -178,15 +223,19 @@ def main_app():
         if filtered_df.empty:
             st.info("검색 결과 없음")
         else:
+            # [디자인] 모바일 최적화를 위해 2열 배치를 유지하되, Streamlit의 자동 반응형 처리 활용
             for i in range(0, len(filtered_df), 2):
                 cols = st.columns(2)
                 batch = filtered_df.iloc[i:i+2]
+                
                 for idx, (_, p) in enumerate(batch.iterrows()):
                     with cols[idx]:
+                        # border=True로 카드 느낌 강조
                         with st.container(border=True):
-                            c1, c2 = st.columns([1, 2])
+                            # [모바일] 이미지와 텍스트 비율 조정 (1.2 : 2)
+                            c1, c2 = st.columns([1.2, 2])
                             
-                            # [왼쪽: 사진] - 크기 통일 적용
+                            # [왼쪽: 사진]
                             with c1:
                                 img_path = p['사진'] if pd.notna(p['사진']) else ""
                                 img_obj = load_image_fixed(img_path)
@@ -194,24 +243,25 @@ def main_app():
                                 if img_obj:
                                     st.image(img_obj, use_column_width=True)
                                 else:
-                                    # 이미지가 없을 때도 동일한 비율의 회색 박스 표시
                                     st.image("https://via.placeholder.com/300x400?text=No+Image", use_column_width=True)
                             
-                            # [오른쪽: 주요 정보]
+                            # [오른쪽: 정보]
                             with c2:
                                 st.subheader(p['이름'])
                                 st.write(f"{p['교구']} / {p['구역']} / {p['교제부서']} {p['직분']}")
                                 st.text(f"📞 {p['전화번호']}")
                                 
-                                # [수정됨] 주소는 심플한 핀 아이콘(📍)으로만 표시
-                                address = str(p['자택전화 / 주소'])
-                                map_url = f"https://www.google.com/maps/search/?api=1&query={address}"
-                                st.markdown(f"### [📍]({map_url})") # 아이콘 크기 키움 (###)
+                                # [주소 연동 개선]
+                                raw_addr = p['자택전화 / 주소']
+                                map_url = get_clean_address_url(raw_addr)
+                                
+                                # 아이콘 크기 강조
+                                st.markdown(f"#### [📍 지도 보기]({map_url})") 
                                 
                                 with st.expander("상세 정보"):
                                     st.write(f"**생년:** {p['생년']}")
                                     st.write(f"**구원일:** {p['구원일']}")
-                                    st.write(f"**주소:** {address}")
+                                    st.write(f"**주소:** {raw_addr}") # 화면엔 원본 주소 표시
                                     st.write(f"**봉사:** {p['봉사부서']}")
                                     st.write(f"**가족:** {p['가족']}")
                                     st.write(f"**차량:** {p['차량번호']}")
