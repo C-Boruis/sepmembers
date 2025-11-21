@@ -22,13 +22,13 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 로드 함수 (캐시 제거 - 즉시 반영을 위해)
+# 2. 데이터 로드 함수
 # -----------------------------------------------------------------------------
+@st.cache_data(ttl=60)
 def load_data(file_path):
     if not os.path.exists(file_path):
         return None
     try:
-        # 무조건 문자열(String)로 읽기
         return pd.read_csv(file_path, encoding='utf-8-sig', dtype=str)
     except:
         try:
@@ -54,29 +54,11 @@ def preprocess_members(df):
     return df
 
 # -----------------------------------------------------------------------------
-# 4. 인증 (로그인) 함수 - [디버깅 강화]
+# 4. 인증 (로그인) 함수 - [긴급 접속 코드 적용]
 # -----------------------------------------------------------------------------
 def login_section():
     st.markdown("## ⛪ 서울은평교회 성도 관리 시스템")
     
-    # 계정 파일이 없으면 강제 생성 (로그인 복구용)
-    if not os.path.exists(ACCOUNTS_FILE):
-        init_accounts = pd.DataFrame({
-            'id': ['admin'],
-            'pw': ['1234'],
-            'name': ['관리자'],
-            'role': ['admin']
-        })
-        init_accounts.to_csv(ACCOUNTS_FILE, index=False, encoding='utf-8-sig')
-        st.warning("⚠️ 계정 파일이 없어 기본값(admin/1234)으로 새로 생성했습니다.")
-        
-    accounts = load_data(ACCOUNTS_FILE)
-
-    # [데이터 정제] 공백 제거
-    if accounts is not None:
-        accounts['id'] = accounts['id'].astype(str).str.strip()
-        accounts['pw'] = accounts['pw'].astype(str).str.strip()
-
     # 로그인 폼
     with st.form("login_form"):
         username = st.text_input("아이디")
@@ -87,33 +69,52 @@ def login_section():
             clean_username = str(username).strip()
             clean_password = str(password).strip()
 
-            # 일치하는 사용자 찾기
-            user = accounts[(accounts['id'] == clean_username) & (accounts['pw'] == clean_password)]
+            # [핵심 수정] 파일 확인 전에 코드로 먼저 인증 (Master Key)
+            # 파일이 깨져도 이 조건이 참이면 무조건 로그인 됩니다.
+            is_master_admin = (clean_username == "admin" and clean_password == "1234")
             
-            if not user.empty:
+            # 파일에서 확인 (일반 유저용)
+            is_file_user = False
+            user_role = "user"
+            user_name = "성도님"
+
+            if not is_master_admin:
+                if os.path.exists(ACCOUNTS_FILE):
+                    accounts = load_data(ACCOUNTS_FILE)
+                    if accounts is not None:
+                        # 공백 제거
+                        accounts['id'] = accounts['id'].astype(str).str.strip()
+                        accounts['pw'] = accounts['pw'].astype(str).str.strip()
+                        
+                        user = accounts[(accounts['id'] == clean_username) & (accounts['pw'] == clean_password)]
+                        if not user.empty:
+                            is_file_user = True
+                            user_name = user.iloc[0]['name']
+                            user_role = user.iloc[0]['role']
+
+            # 로그인 성공 처리
+            if is_master_admin or is_file_user:
                 st.session_state['logged_in'] = True
-                st.session_state['username'] = user.iloc[0]['name']
-                st.session_state['role'] = user.iloc[0]['role']
-                st.success("로그인 성공!")
+                
+                if is_master_admin:
+                    st.session_state['username'] = "관리자(긴급)"
+                    st.session_state['role'] = "admin"
+                else:
+                    st.session_state['username'] = user_name
+                    st.session_state['role'] = user_role
+                
+                st.success(f"{st.session_state['username']}님 환영합니다!")
                 time.sleep(0.5)
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
-                
-                # ----------------------------------------
-                # [디버그 정보 출력] - 왜 안 되는지 보여줌
-                # ----------------------------------------
-                with st.expander("🚨 디버그 정보 보기 (클릭)", expanded=True):
-                    st.write(f"👉 **입력한 값:** ID=[{clean_username}], PW=[{clean_password}]")
-                    st.write("👇 **현재 저장된 계정 목록 (이 값과 똑같이 입력해야 합니다)**")
-                    st.dataframe(accounts)
 
 # -----------------------------------------------------------------------------
 # 5. 메인 앱
 # -----------------------------------------------------------------------------
 def main_app():
     with st.sidebar:
-        st.write(f"**{st.session_state['username']}**님 환영합니다.")
+        st.write(f"**{st.session_state['username']}**님")
         if st.button("로그아웃"):
             st.session_state['logged_in'] = False
             st.rerun()
@@ -128,7 +129,13 @@ def main_app():
             st.session_state['members_df'] = preprocess_members(df)
         elif os.path.exists(MEMBERS_FILE):
             df = load_data(MEMBERS_FILE)
-            st.session_state['members_df'] = preprocess_members(df)
+            if df is not None:
+                st.session_state['members_df'] = preprocess_members(df)
+            else:
+                st.session_state['members_df'] = pd.DataFrame(columns=[
+                '교구', '구역', '사진', '이름', '생년', '구원일', '전화번호', 
+                '자택전화 / 주소', '교제부서', '직분', '봉사부서', '가족', '차량번호'
+            ])
         else:
             st.session_state['members_df'] = pd.DataFrame(columns=[
                 '교구', '구역', '사진', '이름', '생년', '구원일', '전화번호', 
@@ -203,10 +210,18 @@ def main_app():
     # TAB 3: 계정 관리 (Admin)
     if st.session_state['role'] == 'admin':
         with tab3:
+            st.info("여기서 계정을 정리하고 다운로드 받은 뒤, GitHub에 업로드하면 오류가 해결됩니다.")
             if os.path.exists(ACCOUNTS_FILE):
                 acc_df = load_data(ACCOUNTS_FILE)
             else:
                 acc_df = pd.DataFrame(columns=['id', 'pw', 'name', 'role'])
+                # 강제 초기화 데이터
+                if acc_df.empty:
+                    acc_df = pd.DataFrame([
+                        {'id': 'admin', 'pw': '1234', 'name': '관리자', 'role': 'admin'},
+                        {'id': 'user1', 'pw': '1111', 'name': '성도님', 'role': 'user'}
+                    ])
+            
             edited_acc = st.data_editor(acc_df, num_rows="dynamic", use_container_width=True, key="acc")
             st.download_button("💾 계정 다운로드", save_data_to_csv(edited_acc), "accounts_updated.csv", "text/csv")
 
